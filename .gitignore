@@ -1,0 +1,14 @@
+# STM32 build outputs
+firmware/build/
+firmware/*.bin
+firmware/*.elf
+firmware/*.map
+firmware/*.dmp
+
+# Qt/qmake outputs
+qt-parking/build/
+qt-parking/.qmake.stash
+qt-parking/Makefile*
+qt-parking/debug/
+qt-parking/release/
+qt-parking/*.pro.user*
