@@ -1,0 +1,17 @@
+release/main.o
+release/mainwindow.o
+release/loadingdialog.o
+release/entrydialog.o
+release/exitdialog.o
+release/vehiclelistdialog.o
+release/serialcontroller.o
+release/camerathread.o
+release/cardbmanager.o
+release/parkingstore.o
+release/moc_mainwindow.o
+release/moc_loadingdialog.o
+release/moc_entrydialog.o
+release/moc_exitdialog.o
+release/moc_vehiclelistdialog.o
+release/moc_serialcontroller.o
+release/moc_camerathread.o

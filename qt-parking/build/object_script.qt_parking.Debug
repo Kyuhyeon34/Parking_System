@@ -1,0 +1,17 @@
+debug/main.o
+debug/mainwindow.o
+debug/loadingdialog.o
+debug/entrydialog.o
+debug/exitdialog.o
+debug/vehiclelistdialog.o
+debug/serialcontroller.o
+debug/camerathread.o
+debug/cardbmanager.o
+debug/parkingstore.o
+debug/moc_mainwindow.o
+debug/moc_loadingdialog.o
+debug/moc_entrydialog.o
+debug/moc_exitdialog.o
+debug/moc_vehiclelistdialog.o
+debug/moc_serialcontroller.o
+debug/moc_camerathread.o
