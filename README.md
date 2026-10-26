@@ -1,4 +1,4 @@
-# QT-Parking-system (Qt5 버전)
+# 차량 감지 기반 스마트 주차 관제 솔루션
 
 STM32F411 Nucleo + Qt5 주차장 차단기 시뮬레이션.
 `QT-Parking-system_Test` 와 동작·구성이 동일한 버전이며, Qt5 환경에서 빌드/실행할 수 있도록
