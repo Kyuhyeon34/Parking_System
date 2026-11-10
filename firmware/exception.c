@@ -5,6 +5,9 @@
 #define US_TRIGGER_PERIOD_MS 60U
 #define US_REPORT_PERIOD_MS  100U
 
+extern volatile unsigned char us_trigger_flag;
+extern volatile unsigned char us_report_flag;
+
 void _Invalid_ISR(void)
 {
     __disable_irq();
@@ -33,14 +36,14 @@ void SysTick_Handler(void)
     if (trigger_countdown >= US_TRIGGER_PERIOD_MS)
     {
         trigger_countdown = 0U;
-        us_trigger_pending = 1U;
+        us_trigger_flag = 1U;
     }
 
     report_countdown++;
     if (report_countdown >= US_REPORT_PERIOD_MS)
     {
         report_countdown = 0U;
-        us_report_pending = 1U;
+        us_report_flag = 1U;
     }
 }
 

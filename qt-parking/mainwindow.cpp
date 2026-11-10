@@ -5,7 +5,6 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QInputDialog>
-#include <QKeyEvent>
 #include <QLocale>
 #include <QMessageBox>
 #include <QPixmap>
@@ -17,7 +16,7 @@
 #include <QStatusBar>
 #include <QTimer>
 
-#include "cameraview.h"
+#include "camerathread.h"
 #include "entrydialog.h"
 #include "exitdialog.h"
 #include "loadingdialog.h"
@@ -65,7 +64,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
       ui(new Ui::MainWindow),
       m_serial(new SerialController(this)),
-      m_camera(new CameraView(this))
+      m_camera(new CameraThread(this))
 {
     ui->setupUi(this);
 
@@ -92,42 +91,45 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_serial, &SerialController::errorOccurred,
             this, &MainWindow::onSerialError);
 
-    connect(m_camera, &CameraView::frameReady,
+    connect(m_camera, &CameraThread::send_image,
             this, &MainWindow::onCameraFrame);
-    connect(m_camera, &CameraView::statusMessage, this,
+    connect(m_camera, &CameraThread::statusMessage, this,
             [this](const QString &message) {
                 ui->lblCameraStatus->setText(tr("카메라 상태 : %1").arg(message));
             });
+
+    m_dbReady = m_carDb.connectDB();
+    if (m_dbReady) {
+        const QList<QPair<QString, QDateTime>> parkedCars = m_carDb.parkedCars();
+        for (const auto &car : parkedCars) {
+            const QDateTime entryTime = car.second.isValid()
+                                            ? car.second
+                                            : QDateTime::currentDateTime();
+            m_store.insertEntry(car.first, entryTime, QImage());
+        }
+    } else {
+        statusBar()->showMessage(tr("주차 DB에 연결하지 못했습니다."));
+    }
 
     refreshPorts();
     updateCounts();
     setSensorState(false);
     setLedState(QStringLiteral("US_ON"));
 
-    if (!m_camera->start()) {
-        ui->lblCamera->setText(tr("카메라 없음"));
-    }
+    m_camera->start();
 
-    statusBar()->showMessage(tr("포트를 선택하고 연결하세요. "
-                                "연결 없이도 [TEST] 버튼으로 흐름을 확인할 수 있습니다."));
+    if (m_dbReady) {
+        statusBar()->showMessage(
+            tr("포트를 선택하고 연결하세요. "
+               "연결 없이도 차량 감지 버튼으로 흐름을 확인할 수 있습니다."));
+    }
 }
 
 MainWindow::~MainWindow()
 {
+    m_camera->quit();
+    m_camera->wait();
     delete ui;
-}
-
-void MainWindow::keyPressEvent(QKeyEvent *event)
-{
-    /* Modal dialogs swallow input while open, so this only fires on the main
-     * screen and cannot fight a dialog's own Escape-to-cancel. */
-    if (event->key() == Qt::Key_Escape) {
-        send(QStringLiteral("MOTOR STOP"));
-        statusBar()->showMessage(tr("비상 정지: MOTOR STOP 전송"), 3000);
-        return;
-    }
-
-    QMainWindow::keyPressEvent(event);
 }
 
 /* ------------------------------------------------------------------ */
@@ -174,10 +176,7 @@ void MainWindow::toggleConnection()
         return;
     }
 
-    if (m_serial->connectPort(port)) {
-        send(QStringLiteral("PING"));
-        send(QStringLiteral("STATE?"));
-    }
+    m_serial->connectPort(port);
 }
 
 void MainWindow::onConnectedChanged(bool connected, const QString &portName)
@@ -307,11 +306,64 @@ void MainWindow::startRecognition()
 
     LoadingDialog dialog(this);
     dialog.setPreview(capture);
-    dialog.exec();
+
+    QString recognizedPlate;
+    const QMetaObject::Connection aiConnection =
+        connect(m_camera, &CameraThread::send_ai_result, &dialog,
+                [this, &dialog, &recognizedPlate](const QString &result) {
+                    const QString plate = result.trimmed();
+                    if (plate.isEmpty()) {
+                        appendLog(kLogError, tr("번호판 인식 실패"));
+                        QMessageBox::warning(
+                            &dialog, tr("차량 인식"),
+                            tr("번호판을 인식하지 못했습니다.\n"
+                               "다시 시도하거나 수동 입·출차 버튼을 사용하세요."));
+                        dialog.done(QDialog::Rejected);
+                        return;
+                    }
+
+                    recognizedPlate = plate;
+                    appendLog(kLogInfo, tr("번호판 인식: %1").arg(plate));
+                    dialog.accept();
+                });
+
+    m_camera->request_ai();
+    const int dialogResult = dialog.exec();
+    disconnect(aiConnection);
+
+    if (dialogResult != QDialog::Accepted) {
+        cancelRecognition();
+        return;
+    }
+
+    if (!recognizedPlate.isEmpty()) {
+        if (!m_dbReady) {
+            QMessageBox::warning(this, tr("DB 오류"),
+                                 tr("주차 DB가 연결되지 않아 처리할 수 없습니다."));
+            cancelRecognition();
+            return;
+        }
+
+        bool queryOk = false;
+        const bool parked = m_carDb.is_car_parked(recognizedPlate, &queryOk);
+        if (!queryOk) {
+            QMessageBox::warning(this, tr("DB 오류"),
+                                 tr("차량 정보를 조회하지 못했습니다."));
+            cancelRecognition();
+            return;
+        }
+
+        if (parked) {
+            showExitDialog(recognizedPlate);
+        } else {
+            showEntryDialog(capture, recognizedPlate);
+        }
+        return;
+    }
 
     switch (dialog.outcome()) {
     case LoadingDialog::Outcome::Entry:
-        showEntryDialog(capture);
+        showEntryDialog(capture, makeTestPlate());
         break;
     case LoadingDialog::Outcome::Exit:
         showExitDialog();
@@ -322,7 +374,7 @@ void MainWindow::startRecognition()
     }
 }
 
-void MainWindow::showEntryDialog(const QImage &capture)
+void MainWindow::showEntryDialog(const QImage &capture, const QString &plate)
 {
     if (m_store.isFull()) {
         QMessageBox::warning(this, tr("입차 불가"),
@@ -337,13 +389,19 @@ void MainWindow::showEntryDialog(const QImage &capture)
 
     ui->lblInOutState->setText(tr("입차"));
 
-    const QString plate = makeTestPlate();
     const QDateTime entryTime = QDateTime::currentDateTime();
 
     EntryDialog dialog(this);
     dialog.setVehicleInfo(plate, entryTime, capture);
 
     if (dialog.exec() != QDialog::Accepted) {
+        cancelRecognition();
+        return;
+    }
+
+    if (!m_dbReady || !m_carDb.car_in(plate, entryTime)) {
+        QMessageBox::warning(this, tr("DB 오류"),
+                             tr("입차 정보를 저장하지 못했습니다."));
         cancelRecognition();
         return;
     }
@@ -359,16 +417,20 @@ void MainWindow::showEntryDialog(const QImage &capture)
     runGateSequence();
 }
 
-void MainWindow::showExitDialog()
+void MainWindow::showExitDialog(const QString &plate)
 {
     ParkingRecord record;
 
-    /* Real recognition will look the plate up by name. Until then the test
-     * path settles the oldest car still parked. */
-    if (!m_store.firstOpenEntry(&record)) {
+    const bool found = plate.isEmpty() ? m_store.firstOpenEntry(&record)
+                                       : m_store.findOpenEntry(plate, &record);
+    if (!found) {
         QMessageBox::information(this, tr("출차 불가"),
-                                 tr("주차 중인 차량이 없습니다.\n"
-                                    "먼저 [TEST] 입차로 차량을 등록하세요."));
+                                 plate.isEmpty()
+                                     ? tr("주차 중인 차량이 없습니다.\n"
+                                          "먼저 수동 입차로 차량을 등록하세요.")
+                                     : tr("DB에는 주차 중이지만 현재 기록을 불러오지 "
+                                          "못했습니다.\n\n차량 번호: %1")
+                                           .arg(plate));
         cancelRecognition();
         return;
     }
@@ -409,6 +471,13 @@ void MainWindow::completeExit(const ParkingRecord &record,
                               const QDateTime &exitTime, int fee,
                               const QString &logLabel)
 {
+    if (!m_dbReady || !m_carDb.car_out(record.plate, exitTime)) {
+        QMessageBox::warning(this, tr("DB 오류"),
+                             tr("출차 정보를 저장하지 못했습니다."));
+        cancelRecognition();
+        return;
+    }
+
     m_store.closeEntry(record.id, exitTime, fee);
     updateCounts();
     appendLog(kLogInfo, tr("%1: %2, %3")
@@ -591,7 +660,7 @@ void MainWindow::onVehicleListClicked()
     m_modalTaskActive = true;
     const auto releaseBusy = qScopeGuard([this]() { m_modalTaskActive = false; });
 
-    VehicleListDialog dialog(this);
+    VehicleListDialog dialog(m_dbReady ? &m_carDb : nullptr, this);
     dialog.setRecords(m_store.openRecords(), m_store.capacity());
     dialog.exec();
 }

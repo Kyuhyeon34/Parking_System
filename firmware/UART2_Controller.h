@@ -2,6 +2,7 @@
 #define UART2_CONTROLLER_H
 
 void UART2_Init(unsigned int baud);
+void UART2_TXByte(unsigned char byte);
 
 int UART2_RX(unsigned char *byte);
 void UART2_TX(const char *text);

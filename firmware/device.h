@@ -15,6 +15,18 @@
 #include "protocol.h"
 #include "Handler.h"
 
+/* Motor_Handler가 차단기 통로 감지 과정에서 유지하는 상태값. */
+
+typedef enum
+{
+    GATE_IDLE = 0,
+    GATE_OPENING,
+    GATE_HOLD,
+    GATE_WAITING,
+    GATE_CLOSING
+} GateStage;
+
 void Clock_Init(void);
+void System_Init(void);
 
 #endif

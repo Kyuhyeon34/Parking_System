@@ -4,13 +4,14 @@
 #include <QImage>
 #include <QMainWindow>
 
+#include "cardbmanager.h"
 #include "parkingstore.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
 QT_END_NAMESPACE
 
-class CameraView;
+class CameraThread;
 class SerialController;
 class QEventLoop;
 
@@ -24,12 +25,6 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
-
-protected:
-    /* Escape is a panic button: while any dialog is open it already means
-     * "cancel" (QDialog's default), and here on the main window itself it
-     * kills the motor immediately without needing the mouse. */
-    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     /* --- serial port --- */
@@ -46,8 +41,8 @@ private:
      * button; each step is driven from here, which is why no dialog ever
      * has to open another. --- */
     void startRecognition();
-    void showEntryDialog(const QImage &capture);
-    void showExitDialog();
+    void showEntryDialog(const QImage &capture, const QString &plate);
+    void showExitDialog(const QString &plate = QString());
     void completeExit(const ParkingRecord &record, const QDateTime &exitTime,
                       int fee, const QString &logLabel);
     void runGateSequence();
@@ -63,7 +58,7 @@ private:
     void setLedState(const QString &state);
     void appendLog(const QString &direction, const QString &text);
 
-    /* Placeholder until real plate recognition is wired in. */
+    /* Used only by the two manual test branches. */
     QString makeTestPlate() const;
 
     /* True whenever a modal flow owns the screen. A detection arriving now
@@ -72,8 +67,10 @@ private:
 
     Ui::MainWindow *ui;
     SerialController *m_serial;
-    CameraView *m_camera;
+    CameraThread *m_camera;
     ParkingStore m_store;
+    CarDBManager m_carDb;
+    bool m_dbReady = false;
 
     QImage m_lastFrame;
     bool m_recognitionActive = false;

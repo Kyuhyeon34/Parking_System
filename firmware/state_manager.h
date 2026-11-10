@@ -32,6 +32,6 @@ void State_Manager_Run(void);
 
 /* US_Handler가 세팅해서, 차량당 감지 이벤트가 한 번만 보고되게 한다. */
 int State_IsVehiclePresent(void);
-void State_SetVehiclePresent(int present);
+void State_SetVehiclePresent(unsigned char present_flag);
 
 #endif

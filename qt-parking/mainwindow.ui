@@ -324,7 +324,7 @@
               </font>
              </property>
              <property name="text">
-              <string>[TEST] 차량 감지</string>
+              <string>차량 감지</string>
              </property>
             </widget>
            </item>

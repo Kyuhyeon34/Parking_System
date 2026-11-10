@@ -6,7 +6,7 @@
  * 초음파 echo 측정에서는 신경 쓸 필요 없을 만큼 충분히 긴 주기다. */
 #define TIMEBASE_US_PRESCALER ((TIMXCLK / 1000000U) - 1U)
 
-static volatile unsigned int tick_ms;
+extern volatile unsigned int tick_ms;
 
 void Timebase_Init(void)
 {
@@ -50,7 +50,6 @@ void Delay_us(unsigned int us)
     }
 }
 
-/* 부호 없는 뺄셈이라 32비트 밀리초 틱이 랩어라운드돼도 안전하게 동작한다. */
 int Timebase_Elapsed(unsigned int start_tick, unsigned int ms)
 {
     return ((tick_ms - start_tick) >= ms);
