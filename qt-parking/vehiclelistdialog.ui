@@ -6,12 +6,12 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>820</width>
-    <height>500</height>
+    <width>1000</width>
+    <height>560</height>
    </rect>
   </property>
   <property name="windowTitle">
-   <string>주차 중인 차량</string>
+   <string>주차 차량 조회</string>
   </property>
   <property name="windowModality">
    <enum>Qt::ApplicationModal</enum>
@@ -38,7 +38,7 @@
       <enum>QFrame::StyledPanel</enum>
      </property>
      <property name="text">
-      <string>주차 중인 차량</string>
+      <string>주차 차량 조회</string>
      </property>
      <property name="alignment">
       <set>Qt::AlignCenter</set>

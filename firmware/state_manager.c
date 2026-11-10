@@ -1,13 +1,13 @@
 #include "device.h"
 #include "state_manager.h"
 
-static SystemState current_state;
-static int vehicle_present;
+extern SystemState current_state;
+extern unsigned char us_detected_flag;
 
 void State_Init(void)
 {
     current_state = SYS_US_ON;
-    vehicle_present = 0;
+    us_detected_flag = 0U;
     Parking_LED(PARKING_LED_SCAN);
 }
 
@@ -24,7 +24,7 @@ void State_Set(SystemState next)
      * 한다는 뜻이다. */
     if (next == SYS_US_ON)
     {
-        vehicle_present = 0;
+        us_detected_flag = 0U;
     }
 
     Protocol_SendState();
@@ -85,10 +85,10 @@ void State_Manager_Run(void)
 
 int State_IsVehiclePresent(void)
 {
-    return vehicle_present;
+    return us_detected_flag;
 }
 
-void State_SetVehiclePresent(int present)
+void State_SetVehiclePresent(unsigned char present_flag)
 {
-    vehicle_present = present;
+    us_detected_flag = (unsigned char)(present_flag != 0U);
 }

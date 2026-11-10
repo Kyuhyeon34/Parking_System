@@ -1,14 +1,14 @@
 #include "device.h"
 #include "UART2_Controller.h"
 
-#define UART_RX_BUFFER_SIZE 128U
+#define UART_RX_BUFFER_SIZE 32U
 #define UART_RX_BUFFER_MASK (UART_RX_BUFFER_SIZE - 1U)
 
-static volatile unsigned char rx_buffer[UART_RX_BUFFER_SIZE];
-static volatile unsigned int rx_head;
-static volatile unsigned int rx_tail;
+extern volatile unsigned char rx_buffer[UART_RX_BUFFER_SIZE];
+extern volatile unsigned int rx_head;
+extern volatile unsigned int rx_tail;
 
-static void UART2_TXByte(unsigned char byte)
+void UART2_TXByte(unsigned char byte)
 {
     while (!Macro_Check_Bit_Set(USART2->SR, 7))
     {

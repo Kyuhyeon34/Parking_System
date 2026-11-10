@@ -8,10 +8,6 @@ typedef enum
     MOTOR_CCW
 } MotorDirection;
 
-/* L298N에서 약 2V가 소모되므로, 7~9V 입력에서 듀티 70%면 EZ Motor R300이
- * 필요로 하는 5V에 가깝게 맞춰진다. */
-#define MOTOR_GATE_DUTY 70U
-
 /* 차단기 시퀀스: 2초 동안 열고, 최소 1초는 그대로 정지해 있다가,
  * 차량이 센서 아래에 있는 동안은 계속 정지 상태를 유지한 뒤, 2초 동안
  * 닫는다. */
@@ -34,10 +30,10 @@ typedef enum
 #define GATE_WAIT_MAX_MS 30000U
 
 void Motor_Init(void);
-void Motor_Set(MotorDirection direction, unsigned int duty_percent);
+void Motor_Set(MotorDirection direction);
 
-void Motor_CW(unsigned int duty_percent);
-void Motor_CCW(unsigned int duty_percent);
+void Motor_CW(void);
+void Motor_CCW(void);
 void Motor_Stop(void);
 
 /* 논블로킹 차단기 시퀀스.
@@ -47,7 +43,8 @@ void Motor_Stop(void);
  * 담당하고 감지는 Motor_Handler에 맡길 수 있어서, 다른 컨트롤러들이
  * 서로를 모르는 구조와 일치한다. */
 void Gate_Start(void);
-void Gate_Update(int path_blocked);
+void Gate_BeginClosing(void);
+void Gate_Update(unsigned char path_blocked_flag);
 int Gate_IsBusy(void);
 
 /* 팔이 올라간 채로 차량이 빠지길 기다리는 동안만 참이며, 이때

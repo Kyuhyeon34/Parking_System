@@ -4,28 +4,15 @@
 #define MOTOR_PWM_FREQUENCY 20000U
 #define MOTOR_PWM_PERIOD    (TIMXCLK / MOTOR_PWM_FREQUENCY)
 #define MOTOR_PWM_ARR       (MOTOR_PWM_PERIOD - 1U)
+/* L298N의 전압 강하를 고려해 기존과 동일한 70% 출력을 고정 사용한다. */
+#define MOTOR_GATE_COMPARE  (((MOTOR_PWM_PERIOD * 70U) + 50U) / 100U)
 
-typedef enum
-{
-    GATE_IDLE = 0,
-    GATE_OPENING,
-    GATE_HOLD,
-    GATE_WAITING,
-    GATE_CLOSING
-} GateStage;
+extern MotorDirection current_direction;
 
-static MotorDirection current_direction;
-static unsigned int current_duty;
-
-static GateStage gate_stage;
-static unsigned int gate_started_tick;
-static int gate_done;
-static int gate_obstruction_timeout;
-
-static unsigned int DutyToCompare(unsigned int duty_percent)
-{
-    return ((MOTOR_PWM_PERIOD * duty_percent) + 50U) / 100U;
-}
+extern GateStage gate_stage;
+extern unsigned int gate_started_tick;
+extern unsigned char gate_done_flag;
+extern unsigned char gate_timeout_flag;
 
 void Motor_Init(void)
 {
@@ -53,32 +40,21 @@ void Motor_Init(void)
     TIM5->CR1 |= 1U;
 
     current_direction = MOTOR_STOP;
-    current_duty = 0U;
 
     gate_stage = GATE_IDLE;
-    gate_done = 0;
-    gate_obstruction_timeout = 0;
+    gate_done_flag = 0U;
+    gate_timeout_flag = 0U;
 }
 
-void Motor_Set(MotorDirection direction, unsigned int duty_percent)
+void Motor_Set(MotorDirection direction)
 {
-    unsigned int compare;
-
-    if (duty_percent > 100U)
-    {
-        duty_percent = 100U;
-    }
-
-    if ((direction == MOTOR_STOP) || (duty_percent == 0U))
+    if (direction == MOTOR_STOP)
     {
         TIM5->CCR1 = 0U;
         TIM5->CCR2 = 0U;
         current_direction = MOTOR_STOP;
-        current_duty = 0U;
         return;
     }
-
-    compare = DutyToCompare(duty_percent);
 
     if ((current_direction != MOTOR_STOP) && (current_direction != direction))
     {
@@ -92,31 +68,30 @@ void Motor_Set(MotorDirection direction, unsigned int duty_percent)
     {
         /* 실습 배선을 그대로 유지: CW는 PA1/TIM5_CH2로 구동한다. */
         TIM5->CCR1 = 0U;
-        TIM5->CCR2 = compare;
+        TIM5->CCR2 = MOTOR_GATE_COMPARE;
     }
     else
     {
         TIM5->CCR2 = 0U;
-        TIM5->CCR1 = compare;
+        TIM5->CCR1 = MOTOR_GATE_COMPARE;
     }
 
     current_direction = direction;
-    current_duty = duty_percent;
 }
 
-void Motor_CW(unsigned int duty_percent)
+void Motor_CW(void)
 {
-    Motor_Set(MOTOR_CW, duty_percent);
+    Motor_Set(MOTOR_CW);
 }
 
-void Motor_CCW(unsigned int duty_percent)
+void Motor_CCW(void)
 {
-    Motor_Set(MOTOR_CCW, duty_percent);
+    Motor_Set(MOTOR_CCW);
 }
 
 void Motor_Stop(void)
 {
-    Motor_Set(MOTOR_STOP, 0U);
+    Motor_Set(MOTOR_STOP);
 }
 
 /* 차단기는 2초간 반시계로 돌아 팔을 들어올리고, 그다음 무엇을 판단하기
@@ -128,19 +103,19 @@ void Gate_Start(void)
 {
     gate_stage = GATE_OPENING;
     gate_started_tick = Timebase_GetTick();
-    gate_done = 0;
-    gate_obstruction_timeout = 0;
-    Motor_CCW(MOTOR_GATE_DUTY);
+    gate_done_flag = 0U;
+    gate_timeout_flag = 0U;
+    Motor_CCW();
 }
 
-static void Gate_BeginClosing(void)
+void Gate_BeginClosing(void)
 {
     gate_stage = GATE_CLOSING;
     gate_started_tick = Timebase_GetTick();
-    Motor_CW(MOTOR_GATE_DUTY);
+    Motor_CW();
 }
 
-void Gate_Update(int path_blocked)
+void Gate_Update(unsigned char path_blocked_flag)
 {
     switch (gate_stage)
     {
@@ -166,13 +141,13 @@ void Gate_Update(int path_blocked)
 
     case GATE_WAITING:
         /* 차량이 지나가는 동안은 팔을 든 상태로 계속 유지한다. */
-        if (!path_blocked)
+        if (!path_blocked_flag)
         {
             Gate_BeginClosing();
         }
         else if (Timebase_Elapsed(gate_started_tick, GATE_WAIT_MAX_MS))
         {
-            gate_obstruction_timeout = 1;
+            gate_timeout_flag = 1U;
             Gate_BeginClosing();
         }
         break;
@@ -182,7 +157,7 @@ void Gate_Update(int path_blocked)
         {
             gate_stage = GATE_IDLE;
             Motor_Stop();
-            gate_done = 1;
+            gate_done_flag = 1U;
         }
         break;
 
@@ -204,22 +179,22 @@ int Gate_IsWaitingForClear(void)
 
 int Gate_TakeDone(void)
 {
-    if (gate_done == 0)
+    if (gate_done_flag == 0U)
     {
         return 0;
     }
 
-    gate_done = 0;
+    gate_done_flag = 0U;
     return 1;
 }
 
 int Gate_TakeObstructionTimeout(void)
 {
-    if (gate_obstruction_timeout == 0)
+    if (gate_timeout_flag == 0U)
     {
         return 0;
     }
 
-    gate_obstruction_timeout = 0;
+    gate_timeout_flag = 0U;
     return 1;
 }

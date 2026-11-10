@@ -12,3 +12,6 @@ qt-parking/Makefile*
 qt-parking/debug/
 qt-parking/release/
 qt-parking/*.pro.user*
+
+# Runtime data
+parking.db

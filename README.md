@@ -1,205 +1,154 @@
 # 차량 감지 기반 스마트 주차 관제 솔루션
 
-STM32F411 Nucleo + Qt5 주차장 차단기 시뮬레이션.
-`QT-Parking-system_Test` 와 동작·구성이 동일한 버전이며, Qt5 환경에서 빌드/실행할 수 있도록
-카메라 모듈(`qt-parking/cameraview.h/.cpp`)만 Qt5 Multimedia API로 새로 작성했습니다.
-그 외 펌웨어와 Qt 앱 로직은 전부 동일합니다.
+> 초음파 센서로 차량을 감지하고, 카메라로 4자리 차량 번호를 인식해 입·출차를 기록한 뒤 차단기를 자동으로 여닫는 주차장 무인 운영 시스템 (4인 팀 프로젝트)
 
-초음파로 차량을 감지하면 Qt가 번호판 인식 다이얼로그를 띄우고, 입차/출차를 확정하면 차단기 모터가 5초 시퀀스로 동작합니다.
+<p align="center">
+  <img src="docs/images/main.png" width="85%">
+</p>
 
-> 번호판 인식은 아직 붙지 않았습니다. 지금은 `[TEST]` 버튼으로 입차/출차를 직접 지정합니다.
-
----
-
-## 아키텍처
-
-```
-인터럽트 ──▶ Handler ──▶ state (전역) ──▶ StateMachine ──▶ Controller
-             플래그 확인      상태 변경        상태 보고 지시        기능만 수행
-```
-
-| 상태 | 의미 | LED |
-|---|---|---|
-| `US_ON` | 초음파 스캔 중 | 🟢 초록 |
-| `US_OFF` | 인식 / 입차 / 출차 다이얼로그 진행 중 | 🔴 빨강 |
-| `MOTOR` | 차단기 5초 시퀀스 진행 중 | 🔴 빨강 |
-
-처리 중에는 새 차가 어차피 들어올 수 없으므로 초음파 트리거를 멈춥니다.
-
----
-
-## 배선
-
-### MCU 핀 할당
-
-| 기능 | 핀 | 모드 | Nucleo 커넥터 | 연결 대상 |
-|---|---|---|---|---|
-| USART2_TX | PA2 | AF7 | CN10-35 | **ST-LINK VCP (배선 불필요)** |
-| USART2_RX | PA3 | AF7 | CN9-1 | 〃 |
-| 모터 1 | PA0 | AF2 (TIM5_CH1) | CN7-28 | L298N `IN1` |
-| 모터 2 | PA1 | AF2 (TIM5_CH2) | CN7-30 | L298N `IN2` |
-| LED RED | PA4 | GPIO Out | CN7-32 (A2) | 330Ω → 빨강 LED |
-| LED GREEN | PA5 | GPIO Out | CN10-11 (D13) | 330Ω → 초록 LED |
-| 초음파 TRIG | PB0 | GPIO Out | CN7-34 (A3) | HC-SR04 `TRIG` |
-| 초음파 ECHO | PB1 | EXTI1 입력 | CN10-24 | HC-SR04 `ECHO` |
-
-### L298N (EZ 모터 R300 = 5V DC 모터)
-
-| L298N | 연결 |
+| 항목 | 내용 |
 |---|---|
-| `IN1` / `IN2` | PA0 / PA1 |
-| `ENA` | 점퍼 유지 (상시 ON, 속도는 IN1/IN2 PWM으로) |
-| `OUT1` / `OUT2` | 모터 2가닥 (극성 반대면 CW/CCW만 뒤바뀜) |
-| `+12V` | 외부 전원 7~9V (+) |
-| `GND` | 외부 전원 (−) **+ Nucleo GND (공통 접지 필수)** |
-| `+5V` | 연결하지 말 것 |
+| 기간 | 2026.08 (대한상공회의소 서울기술교육센터 AI 시스템반도체 SW개발자 과정) |
+| 인원 | 4명 · 팀 원본 저장소 [Parking-project-QT/QT-Parking-system](https://github.com/Parking-project-QT/QT-Parking-system) |
+| MCU | STM32F411 (Cortex-M4F, 96MHz) · Bare-metal C, 레지스터 직접 제어 (HAL·RTOS 미사용) |
+| 호스트 앱 | C++17 · Qt 5 Widgets · Qt SerialPort · Qt Multimedia |
+| 영상·추론 | USB 카메라 · OpenCV DNN · ONNX 숫자 분류 모델 |
+| 데이터 | SQLite (현재 주차 / 입·출차 이력) |
+| 통신 | USART2 115200bps 8N1 · ASCII 라인 프로토콜 |
 
-L298N이 약 2V를 먹으므로 PWM 듀티 **70%** 로 실효 5V를 맞춥니다 (`MOTOR_GATE_DUTY`).
+## 시스템 구성
 
-### HC-SR04
+```mermaid
+flowchart LR
+    US[HC-SR04<br/>초음파 센서] --> MCU[STM32F411<br/>Bare-metal 펌웨어]
+    MCU -->|DIST / EVT / STATE| APP[Qt 5 관제 앱]
+    APP -->|RECOG / GATE 명령| MCU
+    CAM[USB 카메라] --> APP
+    APP --> CV[OpenCV 전처리<br/>ONNX 숫자 인식]
+    APP <--> DB[(SQLite)]
+    MCU --> MOTOR[L298N + DC 모터<br/>차단기]
+    MCU --> LED[상태 LED]
+```
 
-`VCC` → Nucleo 5V (CN7-18), `GND` → Nucleo GND, `TRIG` → PB0, `ECHO` → PB1.
+STM32는 일정 주기로 센서를 읽고 차단기를 안전하게 움직이는 **실시간 제어**를, PC의 Qt 앱은 카메라·인식·DB·GUI 같은 **연산·데이터 처리**를 맡도록 역할을 나눴습니다.
 
-> PB1은 데이터시트상 5V 내성이 없는 핀입니다. 값이 튀거나 핀이 죽으면 `US_Controller.h` 의
-> `US_ECHO_PIN` 을 `6U`(PB6, 5V 내성)로 바꾸고 `Handler.c` 의 `EXTI1_IRQHandler` 를
-> `EXTI9_5_IRQHandler` 로 바꾸면 됩니다.
+### 회로도
 
-### LED
+<p align="center">
+  <img src="docs/images/circuit.png" width="80%">
+</p>
 
-`PA4/PA5 → 330Ω → LED 애노드(긴 다리) → 캐소드 → GND` (액티브 하이).
-PA5는 보드의 LD2와 공유되어 함께 켜집니다.
-
----
-
-## 시리얼 프로토콜
-
-ASCII 라인, `\n` 종단, **115200 8N1**. PuTTY만으로도 펌웨어 단독 디버깅이 가능합니다.
-
-### Qt → STM32
-
-| 명령 | 응답 | 동작 |
+| 기능 | 핀 | 연결 |
 |---|---|---|
-| `PING` | `OK PONG` | 연결 확인 |
-| `STATE?` | `OK STATE <이름>` | 상태 질의 |
-| `DIST?` | `OK DIST <cm>` | 거리 질의 |
-| `RECOG START` | `OK RECOG` | `US_OFF` 진입 (초록 → 빨강) |
-| `RECOG CANCEL` | `OK SCAN` | `US_ON` 복귀 (빨강 → 초록) |
-| `GATE OPEN` | `OK GATE` | 차단기 5초 시퀀스 시작 |
-| `LED RED\|GREEN ON\|OFF` | `OK LED` | 수동 제어 (디버그) |
-| `MOTOR CW\|CCW <duty>` / `MOTOR STOP` | `OK MOTOR ...` | 수동 제어 (디버그) |
-
-### STM32 → Qt
-
-| 라인 | 의미 |
-|---|---|
-| `DIST <cm>` | 100ms 주기 거리 보고 |
-| `EVT DETECT <cm>` | 20cm 이내 진입 (차량당 1회) |
-| `EVT CLEAR` | 25cm 밖으로 벗어남 |
-| `EVT GATE OBSTRUCTED` | 닫기 직전 안전 확인에서 물체가 계속 감지되어 최대 대기(3초) 후 닫음 |
-| `EVT GATE DONE` | 차단기 시퀀스 종료 |
-| `STATE <이름>` | 상태 전이 알림 |
-
----
+| 모터 PWM | PA0 / PA1 (TIM5 CH1·CH2, 20kHz) | L298N IN1 / IN2 |
+| 상태 LED | PA4 (빨강) / PA5 (초록) | 330Ω → LED |
+| 초음파 TRIG / ECHO | PB0 / PB1 (EXTI1) | HC-SR04 |
+| UART | PA2 / PA3 (USART2) | ST-LINK VCP |
 
 ## 동작 흐름
 
+1. STM32가 60ms마다 초음파를 측정하고, **10cm 이하가 3회 연속**이면 `EVT DETECT`를 보냅니다.
+2. Qt 앱이 카메라 중앙 영역을 캡처해 **4자리 숫자를 인식**합니다.
+3. SQLite에서 현재 주차 상태를 조회해 **입차인지 출차인지** 판단합니다.
+4. 확인을 누르면 DB를 트랜잭션으로 갱신하고 `GATE OPEN`을 보냅니다.
+5. STM32가 차단기를 열고, **차량이 완전히 지나간 것을 확인한 뒤** 닫습니다.
+
+## 핵심 구현
+
+### 1. STM32 Bare-metal 펌웨어
+
 ```
-초음파 감지 (또는 [TEST] 차량 감지)
-        │  RECOG START  → LED 초록 ▶ 빨강
-        ▼
-   차량 인식중 다이얼로그
-        ├ [TEST] 입차 ─▶ 입차 확인 다이얼로그 ─ 확인 ─────────┐
-        ├ [TEST] 출차 ─┬ (사전정산 O) 안내만 표시 ────────────┤
-        │              └ (사전정산 X) 출차 정산 ─ 결제하기 ───┤
-        └ 취소 ────────▶ RECOG CANCEL, 초록 복귀              │
-                                                              ▼
-                                        GATE OPEN → 차단기 시퀀스
-                            (CCW 2초 → 정지 1초 → 안전 확인 → CW 2초)
-                                                              │
-                                    EVT GATE DONE → 초록 복귀, 대수 갱신
-```
-
-**닫기 전 안전 확인**: 차량이 지나간 뒤 바로 닫지 않고 초음파로 재확인합니다. 감지 거리 안에
-물체가 있으면 닫지 않고 대기하며, 최대 3초까지 기다린 뒤에는 `EVT GATE OBSTRUCTED`를 보내고
-닫습니다(센서 고장으로 영원히 멈추는 것을 막기 위한 안전장치).
-
-**사전정산**: 메인 화면의 `사전정산` 버튼 → 차량 번호 입력 → 조회 후 금액 확인 → 정산.
-정산된 차량은 주차 대수에 그대로 잡혀 있다가, 출차 시 결제 화면 없이 안내만 뜨고 차단기가
-바로 열립니다.
-
----
-
-## 빌드 / 실행
-
-```sh
-make            # 펌웨어 + Qt 앱 전체
-make firmware   # 펌웨어만
-make qt         # Qt 앱만
-make flash      # 보드에 write (STM32CubeProgrammer 필요)
-make run        # 전체 빌드 + flash + Qt 앱 실행
-make clean
+인터럽트 ──▶ Handler ──▶ State Manager ──▶ Controller (LED / Motor / US / UART2)
+            플래그 확인     상태 변경·지시        기능만 수행 (서로 직접 호출하지 않음)
 ```
 
-**필요 도구**: ARM GNU Toolchain, STM32CubeProgrammer, MSYS2 UCRT64의 Qt5 (`widgets`, `serialport`,
-`multimedia`). 이 컴퓨터에는 UCRT64에 Qt6도 같이 깔려 있어서 `qmake.exe`는 Qt6를 가리키므로,
-반드시 Qt5 전용 바이너리인 **`qmake-qt5.exe`** 를 씁니다 (`Makefile`에 이미 반영됨).
+- RCC·GPIO·TIM·EXTI·USART·NVIC 레지스터를 직접 설정했습니다.
+- **논블로킹 초음파 측정**: `while(ECHO==0)` 폴링 대신 TIM2(1MHz 프리런)와 EXTI1 인터럽트로 ECHO 폭을 μs 단위로 잽니다. 센서가 응답하지 않아도 메인 루프가 멈추지 않습니다.
+- **UART 수신**: RX 인터럽트에서는 32바이트 링 버퍼에 넣기만 하고, 명령 해석은 메인 루프에서 처리해 ISR을 짧게 유지했습니다.
+- 시스템 상태(`US_ON → US_OFF → MOTOR`)와 차단기 상태(`IDLE → OPENING → HOLD → WAITING → CLOSING`)를 분리했습니다.
 
-STM32CubeProgrammer 설치 경로가 다르면 `CUBE_DIR` 로 덮어쓰면 됩니다:
+### 2. 차단기 안전 로직 — "모르면 막힌 것으로 본다"
 
-```sh
-make flash CUBE_DIR="C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin"
-```
+- 진입은 10cm 이하, 이탈은 15cm 이상으로 **임계값을 다르게** 둬서 경계에서 상태가 흔들리지 않게 했습니다.
+- 같은 조건이 **3회 연속** 확인되어야 상태를 바꿉니다.
+- 차단기를 연 뒤 경로가 20cm보다 멀어진 상태를 3회 확인해야 닫고, 센서 이상에 대비해 **30초 타임아웃** 후 `EVT GATE OBSTRUCTED`를 보고합니다.
+- 모터 방향을 바꾸기 전 두 PWM을 먼저 0으로 내려 H-bridge 즉시 역전환을 피했습니다.
 
-Qt 앱은 **시리얼 미연결 상태에서도** `[TEST]` 버튼으로 전체 흐름을 확인할 수 있습니다.
+### 3. 시리얼 프로토콜 (ASCII, `\n` 종단)
 
----
+사람이 읽을 수 있는 형식이라 Qt 없이 PuTTY만으로 펌웨어를 단독 디버깅할 수 있습니다.
 
-## 파일 구성
-
-### `firmware/`
-
-`QT-Parking-system_Test/firmware` 와 완전히 동일합니다 (Qt 버전과 무관한 STM32 코드이므로 그대로 복사).
-
-| 계층 | 파일 | 역할 |
+| 방향 | 메시지 | 의미 |
 |---|---|---|
-| Controller | `LED_Controller`, `US_Controller`, `UART2_Controller`, `Motor_Controller` | 기능만 수행, 정책 없음 |
-| | `Timebase` | SysTick 1ms + TIM2 1µs 프리런 카운터 |
-| Handler | `Handler.c` | 모든 ISR(SysTick / EXTI1 / USART2) + 폴링 핸들러 4종 |
-| StateMachine | `state_manager` | 전역 state 소유, controller에 지시 |
-| | `protocol` | UART 라인 파서 / 이벤트 포매터 |
+| Qt → STM32 | `PING` / `STATE?` | 연결 확인 / 상태 조회 |
+| Qt → STM32 | `RECOG START` / `RECOG CANCEL` | 인식 단계 진입 / 취소 |
+| Qt → STM32 | `GATE OPEN` / `MOTOR STOP` | 차단기 시퀀스 시작 / 비상 정지 |
+| STM32 → Qt | `DIST <cm>` | 거리 보고 (100ms) |
+| STM32 → Qt | `EVT DETECT <cm>` / `EVT CLEAR` | 차량 감지 / 이탈 |
+| STM32 → Qt | `EVT GATE DONE` / `EVT GATE OBSTRUCTED` | 차단기 완료 / 경로 막힘 타임아웃 |
 
-`crt0.s` 가 모든 벡터를 weak alias로 두기 때문에 ISR을 정의만 하면 자동으로 연결됩니다 (벡터테이블 수정 불필요).
-**새 `.c` 파일은 `firmware/Makefile` 의 `C_SOURCES` 에 직접 추가해야 합니다.**
+### 4. 차량 번호 인식 (OpenCV + ONNX)
 
-### `qt-parking/`
+- 화면 중앙 300×120 영역에 **그레이스케일 → 가우시안 블러 → Otsu 이진화**를 적용합니다.
+- `findContours`로 숫자 후보를 찾아 x 좌표 순으로 정렬하고, 각 숫자를 28×28로 맞춰 **ONNX 모델(MNIST 기반)**로 분류합니다.
+- 숫자 4개가 모두 잡힐 때만 결과를 반환하고, 아니면 실패로 처리합니다.
+- 영상은 외부 서버로 보내지 않고 관제 PC에서 처리합니다.
 
-| 파일 | 역할 |
+### 5. SQLite 입·출차 기록
+
+- `parking`(현재 주차)과 `parking_history`(전체 이력) 두 테이블을 씁니다.
+- 입차·출차 시 두 테이블 변경을 **하나의 트랜잭션**으로 묶어, 중간에 실패하면 롤백합니다.
+- 앱을 다시 켜면 DB에서 현재 주차 차량을 읽어 점유 수를 복원합니다.
+
+| 기간별 주차 차량 조회 | 사전정산 |
 |---|---|
-| `mainwindow` | 전체 흐름 소유. 다이얼로그는 서로를 열지 않고 결과만 반환 |
-| `loadingdialog` | 번호판 인식 자리. 지금은 `[TEST]` 버튼으로 입차/출차 분기 |
-| `entrydialog` / `exitdialog` | 입차 확인 / 출차 정산 |
-| `serialcontroller` | QSerialPort 래퍼 (115200 8N1, 라인 단위 송수신) |
-| `cameraview` | **Qt5 전용 구현.** `QAbstractVideoSurface`로 프레임을 받아 `QImage`로 변환 (RGB32/ARGB32만 지원 포맷으로 광고해 색공간 변환은 백엔드에 위임, 상하 반전 보정 포함). `mainwindow` 쪽에서 보이는 인터페이스는 Qt6 버전과 동일 |
-| `parkingstore` | 메모리 저장소. **DB 합류 시 이 클래스만 교체하면 됨** |
+| <img src="docs/images/vehicle_list.png"> | <img src="docs/images/prepay_confirm.png"> |
 
-### 설정값
+## 결과
 
-| 항목 | 값 | 위치 |
-|---|---|---|
-| 감지 / 해제 거리 | 20cm / 25cm | `state_manager.h` |
-| 감지 확정 횟수 | 3회 연속 (노이즈 제거) | `Handler.c` |
-| 차단기 시퀀스 | 2초 / 1초 / 2초 | `Motor_Controller.h` |
-| 닫기 전 안전 확인 | 60ms 주기 재측정, 최대 3초 대기 | `Motor_Controller.h` |
-| 모터 듀티 | 70% | `Motor_Controller.h` |
-| 최대 주차 | 10대 | `parkingstore.h` |
-| 요금 | 10분당 1,000원 (최소 1,000원) | `parkingstore.h` |
+| 확인 항목 | 결과 |
+|---|---|
+| 차단기 동작 (경로 비어 있음) | 약 4.2초에 열림 → 닫힘 완료 |
+| 차단기 동작 (장애물 7cm) | 장애물이 있는 동안 열림 유지 |
+| 안전 타임아웃 | 초과 시 `EVT GATE OBSTRUCTED` 보고 후 폐쇄 |
+| 차량 감지 판정 | 60ms × 3회 연속 확인 (이론상 약 180ms) |
+| 펌웨어 크기 | Flash 3,896 B / 512 KiB (약 0.74%), RAM 128 B |
+| 실기 연동 | COM 115200bps 거리 로그, 외장 USB 카메라 선택 확인 |
 
----
+### 시연 영상
 
-## 남은 작업
+- [Qt 관제 앱과 카메라 인식 시연](docs/videos/demo_qt.mp4)
+- [STM32 · 초음파 센서 · 차단기 하드웨어 시연](docs/videos/demo_hw.mp4)
 
-1. **번호판 인식** — OpenCV + Tesseract. `LoadingDialog` 의 `[TEST]` 버튼을 인식 결과로 교체하고,
-   `MainWindow` 가 `ParkingStore::findOpenEntry(plate)` 로 입차/출차를 판정하도록 변경.
-2. **DB 연동** — `ParkingStore` 를 실제 DB 클래스로 교체 (인터페이스 동일하게 맞춰둠).
-3. **`QT-Parking-system_Test` 와의 동기화** — 펌웨어나 `qt-parking/`의 공통 로직이 바뀌면
-   이 저장소에도 같은 변경을 반영해야 합니다 (자동 동기화 아님, `cameraview.*` 제외 전부 수동 복사).
+## 팀 / 역할
+
+| 구성원 | 담당 내용 |
+|---|---|
+| 권민지 | 공동 기획, SQLite DB 연동 및 ML 모델 개발 |
+| 김선호 | 공동 기획, FSM 설계, USART2 통신 경로 정비, 펌웨어 Handler·상태·protocol 리팩터링 |
+| 김승환 | 공동 기획, 초기 STM32·Qt 개발 기반 구성, USB 카메라·DB·ML 통합 및 후속 보완 |
+| **이규현** | 공동 기획, 설계 기반 STM32·Qt 주차 시스템의 1차 통합 구현 |
+
+> 역할은 팀 원본 저장소 README 기준입니다.
+
+## 트러블슈팅
+
+- **모터가 안 돌던 문제** — 최대 듀티로 10초 구동해도 보드는 정상인 것을 먼저 확인해 소프트웨어 원인을 배제했고, L298N `ENA` 점퍼 미장착이라는 하드웨어 원인을 빠르게 찾았습니다.
+- **차단기 진행창이 닫히지 않던 문제** — `QSerialPort::readyRead` 핸들러 안에서 완료 신호를 기다려, 신호가 들어올 경로를 스스로 막고 있었습니다. `QTimer::singleShot(0, ...)`으로 처리를 다음 이벤트 루프로 넘겨 해결했습니다.
+- **타임아웃 불일치** — Qt 타임아웃(15초)과 펌웨어 최악 소요 시간(34초)을 따로 관리하다 어긋났습니다. Qt 값을 펌웨어 상수에서 계산하도록 바꿔 자동으로 맞춰지게 했습니다.
+
+## 한계
+
+- 실제 자동차 번호판 전체가 아니라, 정해진 영역 안의 **4자리 숫자**를 인식하는 단계입니다. 인식률을 정량 평가한 자료는 없습니다.
+- 차단기는 DC 모터 기반 축소 모형입니다.
+
+## 폴더 구조
+
+```
+Parking_System/
+├── firmware/            STM32F411 Bare-metal 펌웨어 (Handler / State Manager / Controller)
+├── qt-parking/          Qt 5 관제 앱 (카메라·인식·DB·시리얼)
+│   └── model/           mnist_model.onnx
+├── docs/images, videos  README 사진 · 시연 영상
+└── Makefile             펌웨어 + Qt 앱 통합 빌드
+```

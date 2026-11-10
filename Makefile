@@ -1,5 +1,5 @@
 QT_BIN  ?= C:/msys64/ucrt64/bin
-QMAKE   ?= $(QT_BIN)/qmake-qt5.exe
+QMAKE   ?= $(QT_BIN)/qmake.exe
 QT_MAKE ?= $(QT_BIN)/mingw32-make.exe
 
 export PATH := $(QT_BIN);$(PATH)
@@ -21,7 +21,8 @@ firmware:
 qt: qt-parking/build/Makefile
 	"$(QT_MAKE)" -C qt-parking/build
 
-qt-parking/build/Makefile: qt-parking/qt_parking.pro
+qt-parking/build/Makefile: qt-parking/qt_parking.pro Makefile
+	@if exist "qt-parking\build\Makefile" "$(QT_MAKE)" -C qt-parking/build clean
 	@powershell.exe -NoProfile -Command "New-Item -ItemType Directory -Force -Path 'qt-parking/build' | Out-Null"
 	cd qt-parking/build && "$(QMAKE)" ../qt_parking.pro
 

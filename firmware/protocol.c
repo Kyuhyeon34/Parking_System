@@ -3,53 +3,15 @@
 #include "device.h"
 #include "protocol.h"
 
-#define COMMAND_BUFFER_SIZE 64U
+#define COMMAND_BUFFER_SIZE 16U
 
-static char command_buffer[COMMAND_BUFFER_SIZE];
-static unsigned int command_length;
-static int command_overflow;
+extern char command_buffer[COMMAND_BUFFER_SIZE];
+extern unsigned int command_length;
+extern unsigned char command_overflow_flag;
 
-static int ParseDuty(const char *text, unsigned int *duty)
-{
-    unsigned int value = 0U;
-
-    if (*text == '\0')
-    {
-        return 0;
-    }
-
-    while (*text != '\0')
-    {
-        if ((*text < '0') || (*text > '9'))
-        {
-            return 0;
-        }
-
-        value = (value * 10U) + (unsigned int)(*text - '0');
-
-        if (value > 100U)
-        {
-            return 0;
-        }
-
-        text++;
-    }
-
-    *duty = value;
-    return 1;
-}
-
-static void SendOkDistance(unsigned int cm)
-{
-    UART2_TX("OK DIST ");
-    UART2_TXUnsigned(cm);
-    UART2_TXLine("");
-}
-
-static void ProcessCommand(char *command)
+void ProcessCommand(char *command)
 {
     unsigned int index;
-    unsigned int duty;
 
     for (index = 0U; command[index] != '\0'; index++)
     {
@@ -64,20 +26,7 @@ static void ProcessCommand(char *command)
         return;
     }
 
-    if (strcmp(command, "PING") == 0)
-    {
-        UART2_TXLine("OK PONG");
-    }
-    else if (strcmp(command, "STATE?") == 0)
-    {
-        UART2_TX("OK STATE ");
-        UART2_TXLine(State_Name(State_Get()));
-    }
-    else if (strcmp(command, "DIST?") == 0)
-    {
-        SendOkDistance(US_GetDistanceCm());
-    }
-    else if (strcmp(command, "RECOG START") == 0)
+    if (strcmp(command, "RECOG START") == 0)
     {
         /* The dialog is up, so stop scanning and turn the LED red. */
         State_Set(SYS_US_OFF);
@@ -105,55 +54,6 @@ static void ProcessCommand(char *command)
             UART2_TXLine("OK GATE");
         }
     }
-    else if (strcmp(command, "LED RED ON") == 0)
-    {
-        LED_ON_red();
-        UART2_TXLine("OK LED");
-    }
-    else if (strcmp(command, "LED RED OFF") == 0)
-    {
-        LED_OFF_red();
-        UART2_TXLine("OK LED");
-    }
-    else if (strcmp(command, "LED GREEN ON") == 0)
-    {
-        LED_ON_green();
-        UART2_TXLine("OK LED");
-    }
-    else if (strcmp(command, "LED GREEN OFF") == 0)
-    {
-        LED_OFF_green();
-        UART2_TXLine("OK LED");
-    }
-    else if (strcmp(command, "MOTOR STOP") == 0)
-    {
-        Motor_Stop();
-        UART2_TXLine("OK MOTOR STOP");
-    }
-    else if (strncmp(command, "MOTOR CW ", 9) == 0)
-    {
-        if (ParseDuty(&command[9], &duty))
-        {
-            Motor_CW(duty);
-            UART2_TXLine("OK MOTOR CW");
-        }
-        else
-        {
-            UART2_TXLine("ERR MOTOR_DUTY");
-        }
-    }
-    else if (strncmp(command, "MOTOR CCW ", 10) == 0)
-    {
-        if (ParseDuty(&command[10], &duty))
-        {
-            Motor_CCW(duty);
-            UART2_TXLine("OK MOTOR CCW");
-        }
-        else
-        {
-            UART2_TXLine("ERR MOTOR_DUTY");
-        }
-    }
     else
     {
         UART2_TXLine("ERR UNKNOWN_COMMAND");
@@ -163,7 +63,7 @@ static void ProcessCommand(char *command)
 void Protocol_Init(void)
 {
     command_length = 0U;
-    command_overflow = 0;
+    command_overflow_flag = 0U;
 }
 
 void Protocol_ReceiveByte(unsigned char byte)
@@ -175,7 +75,7 @@ void Protocol_ReceiveByte(unsigned char byte)
 
     if (byte == '\n')
     {
-        if (command_overflow)
+        if (command_overflow_flag)
         {
             UART2_TXLine("ERR LINE_TOO_LONG");
         }
@@ -186,7 +86,7 @@ void Protocol_ReceiveByte(unsigned char byte)
         }
 
         command_length = 0U;
-        command_overflow = 0;
+        command_overflow_flag = 0U;
         return;
     }
 
@@ -196,7 +96,7 @@ void Protocol_ReceiveByte(unsigned char byte)
     }
     else
     {
-        command_overflow = 1;
+        command_overflow_flag = 1U;
     }
 }
 

@@ -9,16 +9,27 @@
 /* SysTick_Handler(exception.c)가 자신의 주기에 맞춰 세팅하고, 여기서
  * 소비한다. ISR과 이 폴링 핸들러가 이제 서로 다른 파일에 있어서
  * Handler.h에 extern으로 선언해둔다. */
-volatile unsigned int us_trigger_pending;
-volatile unsigned int us_report_pending;
+extern volatile unsigned char us_trigger_flag;
+extern volatile unsigned char us_report_flag;
+
+extern unsigned int gate_clear_count;
+extern unsigned char gate_path_blocked_flag;
+extern unsigned char gate_waiting_flag;
 
 /* ------------------------------------------------------------------ */
 /* 폴링 핸들러                                                          */
 /* ------------------------------------------------------------------ */
 
+void Handler(void) {
+    UART2_Handler();     /* 호스트 명령 처리 */
+    US_Handler();        /* 거리 측정 및 감지 */
+    Motor_Handler();     /* 차단기 시퀀스 */
+    LED_Handler();       /* 상태 -> LED */
+}
+
 void US_Handler(void)
 {
-    static int suspended;
+    static unsigned char us_suspended_flag;
     static unsigned int near_count;
     static unsigned int far_count;
 
@@ -28,13 +39,13 @@ void US_Handler(void)
      * 없다: 어차피 새 차량이 차단기를 통과할 수 없다. */
     if (State_Get() != SYS_US_ON)
     {
-        us_trigger_pending = 0U;
-        us_report_pending = 0U;
+        us_trigger_flag = 0U;
+        us_report_flag = 0U;
 
         /* 반쯤 측정하다 만 값은 버려서, 재개했을 때 깨끗하게 시작하도록 한다. */
-        if (!suspended)
+        if (!us_suspended_flag)
         {
-            suspended = 1;
+            us_suspended_flag = 1U;
             near_count = 0U;
             far_count = 0U;
             US_Abort();
@@ -42,11 +53,11 @@ void US_Handler(void)
         return;
     }
 
-    suspended = 0;
+    us_suspended_flag = 0U;
 
-    if (us_trigger_pending != 0U)
+    if (us_trigger_flag != 0U)
     {
-        us_trigger_pending = 0U;
+        us_trigger_flag = 0U;
         US_Trigger();
     }
 
@@ -57,9 +68,9 @@ void US_Handler(void)
 
     distance = US_GetDistanceCm();
 
-    if (us_report_pending != 0U)
+    if (us_report_flag != 0U)
     {
-        us_report_pending = 0U;
+        us_report_flag = 0U;
         Protocol_SendDistance(distance);
     }
 
@@ -121,23 +132,21 @@ void UART2_Handler(void)
 void Motor_Handler(void)
 {
     static unsigned int check_ping_tick;
-    static unsigned int clear_count;
-    static int path_blocked = 1;
-    static int was_waiting;
 
-    const int waiting = Gate_IsWaitingForClear();
+    const unsigned char gate_waiting_state_flag =
+        (unsigned char)Gate_IsWaitingForClear();
 
-    if (waiting)
+    if (gate_waiting_state_flag)
     {
-        if (!was_waiting)
+        if (!gate_waiting_flag)
         {
             /* 대기 상태 진입. "막혀 있음"에서 시작한다: 응답이 아예 없는
              * 센서를 클리어한 경로로 오해하면 안 되기 때문이다.
              * Gate_Update의 타임아웃이 이 가정 때문에 차단기가 영원히
              * 멈추는 걸 막아준다. */
-            was_waiting = 1;
-            path_blocked = 1;
-            clear_count = 0;
+            gate_waiting_flag = 1U;
+            gate_path_blocked_flag = 1U;
+            gate_clear_count = 0;
             check_ping_tick = Timebase_GetTick();
             US_Abort();
         }
@@ -154,32 +163,32 @@ void Motor_Handler(void)
         {
             if (US_GetDistanceCm() > GATE_CLEAR_CM)
             {
-                clear_count++;
-                if (clear_count >= GATE_CLEAR_CONFIRM)
+                gate_clear_count++;
+                if (gate_clear_count >= GATE_CLEAR_CONFIRM)
                 {
-                    path_blocked = 0;
+                    gate_path_blocked_flag = 0U;
                 }
             }
             else
             {
-                clear_count = 0;
-                path_blocked = 1;
+                gate_clear_count = 0;
+                gate_path_blocked_flag = 1U;
             }
         }
     }
-    else if (was_waiting)
+    else if (gate_waiting_flag)
     {
         /* 대기 상태를 빠져나갈 때만 실행되고, 매 루프마다 실행되지는
          * 않는다: US_Abort는 측정 플래그를 지워버리므로, 여기서 무조건
          * 호출하면 US_Handler가 값을 보기도 전에 매번 측정값을 날리게
          * 된다. */
-        was_waiting = 0;
-        path_blocked = 1;
-        clear_count = 0;
+        gate_waiting_flag = 0U;
+        gate_path_blocked_flag = 1U;
+        gate_clear_count = 0;
         US_Abort();
     }
 
-    Gate_Update(path_blocked);
+    Gate_Update(gate_path_blocked_flag);
 }
 
 void LED_Handler(void)
